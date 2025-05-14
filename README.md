@@ -1,5 +1,7 @@
 # Phishing Email Detection Script
 
+ 🐍 Phishing Email Detection Script (Python/Bash)
+
 This Python script analyzes email content for potential phishing indicators by examining:
 - Email headers for mismatches or spoofing attempts
 - Links for suspicious patterns (IP addresses, URL shorteners, subdomain tricks)
