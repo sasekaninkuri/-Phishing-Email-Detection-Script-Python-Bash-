@@ -1,0 +1,5 @@
+echo "From: suspicious@example.com
+Reply-To: attacker@malicious.com
+Subject: Urgent: Verify your account
+
+Click here to verify your account: http://paypal.com.security-check.com/verify" > test_email.txt
