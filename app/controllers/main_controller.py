@@ -1,5 +1,8 @@
-from models.analyzer import analyze_headers, analyze_links, analyze_content
-from views.console_view import display_banner, get_user_choice, get_email_input, get_url_input, show_email_analysis_report, show_url_analysis_report
+from app.models.analyzer import analyze_headers, analyze_links, analyze_content
+from app.views.console_view import (
+    display_banner, get_user_choice, get_email_input,
+    get_url_input, show_email_analysis_report, show_url_analysis_report
+)
 import sys
 
 def run_analysis():
@@ -33,4 +36,3 @@ def run_analysis():
 
     else:
         print("\033[91mInvalid option. Please enter 1, 2, or 3.\033[0m")
-

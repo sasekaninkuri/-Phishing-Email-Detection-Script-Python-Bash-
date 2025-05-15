@@ -86,5 +86,3 @@ def analyze_content(text):
             suspicious_content.append(f"Phishing keyword detected: {keyword}")
 
     return suspicious_content
-
-
