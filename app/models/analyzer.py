@@ -1,88 +1,116 @@
 import re
 from urllib.parse import urlparse
+import tldextract
+import ipaddress
+import hashlib
+import requests
+from datetime import datetime
+import whois
+from bs4 import BeautifulSoup
 
-PHISHING_KEYWORDS = [
-    'verify', 'account', 'login', 'update', 'urgent', 'security',
-    'alert', 'important', 'action required', 'suspended', 'bank',
-    'paypal', 'irs', 'password', 'credentials', 'click here'
-]
+class PhishingAnalyzer:
+    def __init__(self):
+        self.phishing_keywords = self._load_keywords()
+        self.known_phishing_domains = set()
+        self.suspicious_tlds = {'.ru', '.cn', '.tk', '.ml', '.ga', '.cf', '.gq'}
+        self.load_known_phishing_domains()
 
-def analyze_headers(headers):
-    suspicious_flags = []
+    def _load_keywords(self):
+        return [
+            "verify your account", "update your information", "suspended account",
+            "click here to login", "password expires", "urgent action required",
+            "you've won", "reset your password", "confirm your identity",
+            "account verification", "security alert", "immediate action required",
+            "unauthorized login attempt", "limited time offer", "account suspension",
+            "verify your identity", "billing problem", "payment failed",
+            "invoice attached", "urgent payment required", "action required: your account",
+            "account locked", "unusual login activity", "important security notice"
+        ]
 
-    from_header = re.search(r'From:.*?<([^>]+)>', headers, re.IGNORECASE)
-    reply_to_header = re.search(r'Reply-To:.*?<([^>]+)>', headers, re.IGNORECASE)
-
-    from_email = from_header.group(1) if from_header else None
-    reply_email = reply_to_header.group(1) if reply_to_header else None
-
-    if from_email:
-        if '@' not in from_email or len(from_email.split('@')) != 2:
-            suspicious_flags.append(f"Invalid From address: {from_email}")
-    else:
-        suspicious_flags.append("Missing 'From' header.")
-
-    if reply_email:
-        if '@' not in reply_email or len(reply_email.split('@')) != 2:
-            suspicious_flags.append(f"Invalid Reply-To address: {reply_email}")
-    else:
-        suspicious_flags.append("Missing 'Reply-To' header.")
-
-    if from_email and reply_email:
-        from_domain = from_email.split('@')[-1].lower()
-        reply_domain = reply_email.split('@')[-1].lower()
-        if from_domain != reply_domain:
-            suspicious_flags.append(f"Mismatched domains: {from_domain} vs {reply_domain}")
-
-    if 'X-Mailer' not in headers and 'X-Originating-IP' not in headers:
-        suspicious_flags.append("Missing important headers (possible spoofing)")
-
-    return suspicious_flags
-
-def analyze_links(text):
-    suspicious_links = []
-
-    url_pattern = re.compile(r"https?://[^\s<>\"']+|www\.[^\s<>\"']+")
-    ip_pattern = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
-
-    trusted_domains = ['paypal.com', 'google.com', 'microsoft.com', 'apple.com', 'github.com']
-    phishing_indicators = ['paypal-update', 'secure-paypal', 'login', 'account', 'verify']
-    url_shorteners = ['bit.ly', 'goo.gl', 'tinyurl.com', 'ow.ly', 't.co']
-
-    urls = url_pattern.findall(text)
-
-    for url in urls:
+    def load_known_phishing_domains(self):
         try:
-            parsed = urlparse(url if url.startswith('http') else f'http://{url}')
-            domain = parsed.netloc.lower()
+            response = requests.get("https://openphish.com/feed.txt")
+            if response.status_code == 200:
+                self.known_phishing_domains.update(response.text.splitlines())
+        except:
+            pass
 
-            if any(ind in domain for ind in phishing_indicators):
-                suspicious_links.append(f"Suspicious domain: {url}")
-                continue
+    def extract_headers(self, email_content):
+        header_part = email_content.split('\n\n')[0]
+        headers = {}
+        for line in header_part.split('\n'):
+            if ':' in line:
+                key, value = line.split(':', 1)
+                headers[key.strip().lower()] = value.strip()
+        return headers
 
-            if not any(domain.endswith(td) for td in trusted_domains):
-                if parsed.scheme != 'https':
-                    suspicious_links.append(f"Insecure (non-HTTPS) URL: {url}")
-                if ip_pattern.search(domain):
-                    suspicious_links.append(f"IP address in URL: {url}")
-                    continue
-                if any(short in domain for short in url_shorteners):
-                    suspicious_links.append(f"URL shortener: {url}")
-                    continue
-                parts = domain.split('.')
-                if len(parts) > 2 and parts[-2] not in ['com', 'net', 'org']:
-                    suspicious_links.append(f"Suspicious subdomain: {url}")
-        except Exception as e:
-            suspicious_links.append(f"Error parsing URL {url}: {e}")
+    def analyze_headers(self, headers):
+        flags = []
+        score = 0
 
-    return suspicious_links
+        if 'received-spf' not in headers:
+            flags.append("Missing SPF record - possible spoofing")
+            score += 1
+        if 'authentication-results' not in headers:
+            flags.append("Missing authentication results header")
+            score += 1
+        else:
+            auth_results = headers['authentication-results'].lower()
+            if 'dkim=pass' not in auth_results:
+                flags.append("DKIM verification failed")
+                score += 2
+            if 'dmarc=pass' not in auth_results:
+                flags.append("DMARC verification failed")
+                score += 2
 
-def analyze_content(text):
-    suspicious_content = []
-    text_lower = text.lower()
+        if 'from' in headers and 'reply-to' in headers and headers['from'].lower() != headers['reply-to'].lower():
+            flags.append("'From' and 'Reply-To' mismatch")
+            score += 2
 
-    for keyword in PHISHING_KEYWORDS:
-        if re.search(rf'\b{re.escape(keyword)}\b', text_lower):
-            suspicious_content.append(f"Phishing keyword detected: {keyword}")
+        if 'return-path' in headers and 'from' in headers and headers['return-path'].lower() != headers['from'].lower():
+            flags.append("'Return-Path' differs from 'From' header")
+            score += 1
 
-    return suspicious_content
+        if 'from' in headers:
+            domain = self.extract_domain(headers['from'])
+            if domain and self.is_suspicious_domain(domain):
+                flags.append(f"Suspicious sender domain: {domain}")
+                score += 3
+
+        return {'flags': flags, 'score': score}
+
+    def extract_domain(self, email_or_url):
+        if '@' in email_or_url:
+            return email_or_url.split('@')[-1].lower()
+        try:
+            extracted = tldextract.extract(email_or_url)
+            return f"{extracted.domain}.{extracted.suffix}".lower()
+        except:
+            return None
+
+    def is_suspicious_domain(self, domain):
+        if domain in self.known_phishing_domains:
+            return True
+        return any(domain.endswith(tld) for tld in self.suspicious_tlds)
+
+    def analyze_email(self, email_content):
+        headers = self.extract_headers(email_content)
+        header_result = self.analyze_headers(headers)
+
+        content_score = 0
+        content_flags = []
+        for keyword in self.phishing_keywords:
+            if keyword in email_content.lower():
+                content_flags.append(f"Keyword detected: {keyword}")
+                content_score += 1
+
+        total_score = header_result['score'] + content_score
+        verdict = "Likely Phishing" if total_score >= 5 else "Possibly Safe"
+
+        return {
+            'headers': header_result['flags'],
+            'links': [],  # Optional: extract and analyze links from content
+            'content': content_flags,
+            'score': total_score,
+            'verdict': verdict
+        }

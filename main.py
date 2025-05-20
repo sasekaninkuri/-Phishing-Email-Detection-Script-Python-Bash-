@@ -1,6 +1,4 @@
-from app.controllers.main_controller import run_analysis
+from app.views.console_view import main
 
 if __name__ == "__main__":
-    run_analysis()
-
-
+    main()
